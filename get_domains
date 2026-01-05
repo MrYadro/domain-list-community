@@ -23,7 +23,7 @@ if [ ! -f "$LOCAL_FILE" ]; then
     curl -fsSL "$PDLCDAT" -o "/usr/share/xray/personal.dat"
     curl -fsSL "$CDLCDAT" -o "/usr/share/xray/community.dat"
     mv "$TEMP_FILE" "$LOCAL_FILE"
-    service xray_core restart
+    /etc/init.d/xray_core restart
     exit 0
 fi
 
@@ -32,7 +32,7 @@ if ! cmp -s "$TEMP_FILE" "$LOCAL_FILE"; then
     logger -p info -t get_domains "Files are different. Downloading second file..."
     curl -fsSL "$PDLCDAT" -o "/usr/share/xray/personal.dat"
     curl -fsSL "$CDLCDAT" -o "/usr/share/xray/community.dat"
-    service xray_core restart
+    /etc/init.d/xray_core restart
 else
     logger -p info -t get_domains "Files are identical. No action needed."
 fi
