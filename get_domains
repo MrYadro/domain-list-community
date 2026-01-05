@@ -19,7 +19,7 @@ fi
 
 # If local file does not exist, treat it as different
 if [ ! -f "$LOCAL_FILE" ]; then
-    logger -p info -t get_domains "Local file does not exist. Downloading second file..."
+    logger -p info -t get_domains "Local file does not exist. Downloading domain list..."
     curl -fsSL "$PDLCDAT" -o "/usr/share/xray/personal.dat"
     curl -fsSL "$CDLCDAT" -o "/usr/share/xray/community.dat"
     mv "$TEMP_FILE" "$LOCAL_FILE"
@@ -29,12 +29,12 @@ fi
 
 # Compare files
 if ! cmp -s "$TEMP_FILE" "$LOCAL_FILE"; then
-    logger -p info -t get_domains "Files are different. Downloading second file..."
+    logger -p info -t get_domains "Files are different. Downloading domain list..."
     curl -fsSL "$PDLCDAT" -o "/usr/share/xray/personal.dat"
     curl -fsSL "$CDLCDAT" -o "/usr/share/xray/community.dat"
     /etc/init.d/xray_core restart
 else
-    logger -p info -t get_domains "Files are identical. No action needed."
+    logger -p info -t get_domains "Files are identical. Skipping."
 fi
 
 # Replace local file with the new one
