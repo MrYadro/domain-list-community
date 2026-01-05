@@ -1,0 +1,41 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+
+# Configuration
+SHA256SUM="https://github.com/MrYadro/domain-list-community/releases/latest/download/dlc.dat.sha256sum"
+PDLCDAT="https://github.com/MrYadro/domain-list-community/releases/latest/download/dlc.dat"
+CDLCDAT="https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat"
+
+LOCAL_FILE="/tmp/dlc.dat.sha256sum"
+TEMP_FILE="/tmp/dlc.dat.sha256sum.tmp"
+
+# Download the file to a temporary location
+curl -fsSL "$SHA256SUM" -o "$TEMP_FILE"
+if [ $? -ne 0 ]; then
+    logger -p info -t get_domains "Failed to download $SHA256SUM"
+    exit 1
+fi
+
+# If local file does not exist, treat it as different
+if [ ! -f "$LOCAL_FILE" ]; then
+    logger -p info -t get_domains "Local file does not exist. Downloading second file..."
+    curl -fsSL "$PDLCDAT" -o "/usr/share/xray/personal.dat"
+    curl -fsSL "$CDLCDAT" -o "/usr/share/xray/community.dat"
+    mv "$TEMP_FILE" "$LOCAL_FILE"
+    service xray_core restart
+    exit 0
+fi
+
+# Compare files
+if ! cmp -s "$TEMP_FILE" "$LOCAL_FILE"; then
+    logger -p info -t get_domains "Files are different. Downloading second file..."
+    curl -fsSL "$PDLCDAT" -o "/usr/share/xray/personal.dat"
+    curl -fsSL "$CDLCDAT" -o "/usr/share/xray/community.dat"
+    service xray_core restart
+else
+    logger -p info -t get_domains "Files are identical. No action needed."
+fi
+
+# Replace local file with the new one
+mv "$TEMP_FILE" "$LOCAL_FILE"
