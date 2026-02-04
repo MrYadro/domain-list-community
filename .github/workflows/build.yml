@@ -33,7 +33,7 @@ jobs:
           echo "TAG_NAME=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
         shell: bash
 
-      - name: Build dlc.dat file
+      - name: Build dlc.dat and plain lists
         run: |
           cd code || exit 1
           go run ./ --outputdir=../
