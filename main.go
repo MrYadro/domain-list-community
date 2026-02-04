@@ -94,7 +94,7 @@ func parseEntry(line string) (Entry, error) {
 	var entry Entry
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
-		return entry, errors.New("empty entry")
+		return entry, fmt.Errorf("empty line")
 	}
 
 	// Parse type and value
@@ -290,60 +290,91 @@ func isMatchAttrFilters(entry *Entry, incFilter *Inclusion) bool {
 	return true
 }
 
-func ParseList(list *List, ref map[string]*List) (*ParsedList, error) {
-	pl := &ParsedList{
-		Name:      list.Name,
-		Inclusion: make(map[string]bool),
-	}
-	entryList := list.Entry
-	for {
-		newEntryList := make([]Entry, 0, len(entryList))
-		hasInclude := false
-		for _, entry := range entryList {
-			if entry.Type == "include" {
-				refName := strings.ToUpper(entry.Value)
-				if entry.Attrs != nil {
-					for _, attr := range entry.Attrs {
-						InclusionName := strings.ToUpper(refName + "@" + attr.Key)
-						if pl.Inclusion[InclusionName] {
-							continue
-						}
-						pl.Inclusion[InclusionName] = true
-
-						refList := ref[refName]
-						if refList == nil {
-							return nil, errors.New(entry.Value + " not found.")
-						}
-						attrEntrys := createIncludeAttrEntrys(refList, attr)
-						if len(attrEntrys) != 0 {
-							newEntryList = append(newEntryList, attrEntrys...)
-						}
-					}
-				} else {
-					InclusionName := refName
-					if pl.Inclusion[InclusionName] {
-						continue
-					}
-					pl.Inclusion[InclusionName] = true
-					refList := ref[refName]
-					if refList == nil {
-						return nil, errors.New(entry.Value + " not found.")
-					}
-					newEntryList = append(newEntryList, refList.Entry...)
-				}
-				hasInclude = true
+func polishList(roughMap map[string]*Entry) []*Entry {
+	finalList := make([]*Entry, 0, len(roughMap))
+	queuingList := make([]*Entry, 0, len(roughMap)) // Domain/full entries without attr
+	domainsMap := make(map[string]bool)
+	for _, entry := range roughMap {
+		switch entry.Type { // Bypass regexp, keyword and "full/domain with attr"
+		case dlc.RuleTypeRegexp:
+			finalList = append(finalList, entry)
+		case dlc.RuleTypeKeyword:
+			finalList = append(finalList, entry)
+		case dlc.RuleTypeDomain:
+			domainsMap[entry.Value] = true
+			if len(entry.Attrs) != 0 {
+				finalList = append(finalList, entry)
 			} else {
-				newEntryList = append(newEntryList, entry)
+				queuingList = append(queuingList, entry)
+			}
+		case dlc.RuleTypeFullDomain:
+			if len(entry.Attrs) != 0 {
+				finalList = append(finalList, entry)
+			} else {
+				queuingList = append(queuingList, entry)
 			}
 		}
-		entryList = newEntryList
-		if !hasInclude {
-			break
+	}
+	// Remove redundant subdomains for full/domain without attr
+	for _, qentry := range queuingList {
+		isRedundant := false
+		pd := qentry.Value // To be parent domain
+		if qentry.Type == dlc.RuleTypeFullDomain {
+			pd = "." + pd // So that `domain:example.org` overrides `full:example.org`
+		}
+		for {
+			idx := strings.Index(pd, ".")
+			if idx == -1 {
+				break
+			}
+			pd = pd[idx+1:] // Go for next parent
+			if domainsMap[pd] {
+				isRedundant = true
+				break
+			}
+		}
+		if !isRedundant {
+			finalList = append(finalList, qentry)
 		}
 	}
-	pl.Entry = entryList
+	// Sort final entries
+	slices.SortFunc(finalList, func(a, b *Entry) int {
+		return strings.Compare(a.Plain, b.Plain)
+	})
+	return finalList
+}
 
-	return pl, nil
+func resolveList(pl *ParsedList) error {
+	if _, pldone := finalMap[pl.Name]; pldone {
+		return nil
+	}
+
+	if cirIncMap[pl.Name] {
+		return fmt.Errorf("circular inclusion in: %q", pl.Name)
+	}
+	cirIncMap[pl.Name] = true
+	defer delete(cirIncMap, pl.Name)
+
+	roughMap := make(map[string]*Entry) // Avoid basic duplicates
+	for _, dentry := range pl.Entries { // Add direct entries
+		roughMap[dentry.Plain] = dentry
+	}
+	for _, inc := range pl.Inclusions {
+		incPl, exist := plMap[inc.Source]
+		if !exist {
+			return fmt.Errorf("list %q includes a non-existent list: %q", pl.Name, inc.Source)
+		}
+		if err := resolveList(incPl); err != nil {
+			return err
+		}
+		for _, ientry := range finalMap[inc.Source] {
+			if isMatchAttrFilters(ientry, inc) { // Add included entries
+				roughMap[ientry.Plain] = ientry
+			}
+		}
+	}
+	finalMap[pl.Name] = polishList(roughMap)
+	return nil
 }
 
 func run() error {
@@ -367,15 +398,41 @@ func run() error {
 		return err
 	})
 	if err != nil {
-		fmt.Println("Failed: ", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to loadData: %w", err)
 	}
 
-	// Create output directory if not exist
-	if _, err := os.Stat(*outputDir); os.IsNotExist(err) {
-		if mkErr := os.MkdirAll(*outputDir, 0755); mkErr != nil {
-			fmt.Println("Failed: ", mkErr)
-			os.Exit(1)
+	// Generate plMap
+	for refName, refList := range refMap {
+		if err := parseList(refName, refList); err != nil {
+			return fmt.Errorf("failed to parseList %q: %w", refName, err)
+		}
+	}
+
+	// Generate finalMap
+	for plname, pl := range plMap {
+		if err := resolveList(pl); err != nil {
+			return fmt.Errorf("failed to resolveList %q: %w", plname, err)
+		}
+	}
+
+	// Make sure output directory exists
+	if err := os.MkdirAll(*outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// Export plaintext list
+	for rawEpList := range strings.SplitSeq(*exportLists, ",") {
+		if epList := strings.TrimSpace(rawEpList); epList != "" {
+			entries, exist := finalMap[strings.ToUpper(epList)]
+			if !exist || len(entries) == 0 {
+				fmt.Printf("list %q does not exist or is empty\n", epList)
+				continue
+			}
+			if err := writePlainList(epList, entries); err != nil {
+				fmt.Printf("failed to write list %q: %v\n", epList, err)
+				continue
+			}
+			fmt.Printf("list %q has been generated successfully.\n", epList)
 		}
 	}
 
@@ -384,13 +441,7 @@ func run() error {
 	for siteName, siteEntries := range finalMap {
 		site, err := makeProtoList(siteName, siteEntries)
 		if err != nil {
-			fmt.Println("Failed: ", err)
-			os.Exit(1)
-		}
-		site, err := pl.toProto()
-		if err != nil {
-			fmt.Println("Failed: ", err)
-			os.Exit(1)
+			return fmt.Errorf("failed to makeProtoList %q: %w", siteName, err)
 		}
 		protoList.Entry = append(protoList.Entry, site)
 	}
@@ -404,7 +455,16 @@ func run() error {
 		return fmt.Errorf("failed to marshal: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(*outputDir, *outputName), protoBytes, 0644); err != nil {
-		fmt.Println("Failed: ", err)
+		return fmt.Errorf("failed to write output: %w", err)
+	}
+	fmt.Printf("%q has been generated successfully.\n", *outputName)
+	return nil
+}
+
+func main() {
+	flag.Parse()
+	if err := run(); err != nil {
+		fmt.Printf("Fatal error: %v\n", err)
 		os.Exit(1)
 	}
 }
