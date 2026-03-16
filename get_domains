@@ -6,6 +6,7 @@ START=99
 SHA256SUM="https://github.com/MrYadro/domain-list-community/releases/latest/download/dlc.dat.sha256sum"
 PDLCDAT="https://github.com/MrYadro/domain-list-community/releases/latest/download/dlc.dat"
 CDLCDAT="https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat"
+GEOIPDAT="https://github.com/v2fly/geoip/releases/latest/download/geoip.dat"
 
 LOCAL_FILE="/tmp/dlc.dat.sha256sum"
 TEMP_FILE="/tmp/dlc.dat.sha256sum.tmp"
@@ -22,6 +23,7 @@ if [ ! -f "$LOCAL_FILE" ]; then
     logger -p info -t get_domains "Local file does not exist. Downloading domain list..."
     curl -fsSL "$PDLCDAT" -o "/usr/share/xray/personal.dat"
     curl -fsSL "$CDLCDAT" -o "/usr/share/xray/community.dat"
+    curl -fsSL "$GEOIPDAT" -o "/usr/share/xray/geoip.dat"
     mv "$TEMP_FILE" "$LOCAL_FILE"
     /etc/init.d/xray_core restart
     exit 0
@@ -32,6 +34,7 @@ if ! cmp -s "$TEMP_FILE" "$LOCAL_FILE"; then
     logger -p info -t get_domains "Files are different. Downloading domain list..."
     curl -fsSL "$PDLCDAT" -o "/usr/share/xray/personal.dat"
     curl -fsSL "$CDLCDAT" -o "/usr/share/xray/community.dat"
+    curl -fsSL "$GEOIPDAT" -o "/usr/share/xray/geoip.dat"
     /etc/init.d/xray_core restart
 else
     logger -p info -t get_domains "Files are identical. Skipping."
